@@ -8,7 +8,7 @@ from operator import xor
 #  hence controled host atx f-panel will get HIGH digital set
 BAUDRATE = 19200
 UART_TIMEOUT = 1 # second(s) timeout of serial write
-UART_MAX_BUF = UART_TIMEOUT*BAUDRATE//10 # heuristic value prevent timeout, related to the serial output buffer
+UART_MAX_BUF = UART_TIMEOUT*BAUDRATE//10 # heuristic value prevent timeout, related to the board serial input buffer
 
 ## Arduino mouse button code
 MOUSE_LEFT = 1
@@ -63,7 +63,6 @@ UART_SEND_MOUSE_CLEAR = _mclr + checksum(_mclr)
 _atx_convert = {0xFD: CMD_SHORT_POWER, 0xFE: CMD_RESET, 0xFF: CMD_LONG_POWER}
 _atx = lambda sig: struct.pack('!2sBB', MAGIC, _atx_convert[sig], 1)
 UART_SEND_ATX = lambda sig: _atx(sig) + checksum(_atx(sig))
-ATX_DELAY_TIME = {0xFD: 0.4, 0xFE: 0.4, 0xFF: 5}
 
 __all__ = [
     'BAUDRATE',
@@ -80,5 +79,4 @@ __all__ = [
     'UART_SEND_MOUSE_WHEEL',
     'UART_SEND_MOUSE_CLEAR',
     'UART_SEND_ATX',
-    'ATX_DELAY_TIME',
 ]

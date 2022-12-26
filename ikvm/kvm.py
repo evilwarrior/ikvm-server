@@ -68,10 +68,6 @@ class Kvm:
         self.__mjpg_fps = None
         self.__mjpg_port = None
         self.__loop = None
-        # Whenever iKVM server send a axt signal to board, set the timer for preventing server sent any data to board
-        # Because if server still send data to board in the meantime, board cannot keep receiving data from serial
-        # while server send, this will occur error on board serial communication
-        self.__delay_timer = (0, 0) # set the prohibit timer
 
     def start(self):
         # Open logfile
@@ -645,13 +641,6 @@ class Kvm:
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE, 'Serial Error: Device not opened'))
             return
 
-        if time()-self.__delay_timer[1] <= self.__delay_timer[0]:
-            ## Send failure message as board is in atx operation
-            self.__log_write(4, 'Send key is prevented since board is busy')
-            self.__log_write(5, 'Put a failure send key response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE, 'Serial Error: board is busy'))
-            return
-
         press = 'press' if act == KEY_PRESS else 'release'
         # Determine detail be with printable key or hex code
         key_txt = '"%s"' %chr(key) if chr(key).isprintable() and key in range(0x80) else '<{:02X}>'.format(key)
@@ -678,13 +667,6 @@ class Kvm:
             self.__log_write(1, 'Send text characters failed as serial device not opened')
             self.__log_write(5, 'Put a failure send key response to write queue')
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE, 'Serial Error: Device not opened'))
-            return
-
-        if time()-self.__delay_timer[1] <= self.__delay_timer[0]:
-            ## Send failure message as board is in atx operation
-            self.__log_write(4, 'Send text characters is prevented since board is busy')
-            self.__log_write(5, 'Put a failure send key response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE, 'Serial Error: board is busy'))
             return
 
         # Prepare shown characters in replay message
@@ -714,13 +696,6 @@ class Kvm:
             self.__log_write(1, 'Release all keys failed as serial device not opened')
             self.__log_write(5, 'Put a failure send key response to write queue')
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE, 'Serial Error: Device not opened'))
-            return
-
-        if time()-self.__delay_timer[1] <= self.__delay_timer[0]:
-            ## Send failure message as board is in atx operation
-            self.__log_write(4, 'Release all keys is prevented since board is busy')
-            self.__log_write(5, 'Put a failure send key response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE, 'Serial Error: board is busy'))
             return
 
         cmd = UART_SEND_KEY_CLEAR
@@ -840,13 +815,6 @@ class Kvm:
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: Device not opened'))
             return
 
-        if time()-self.__delay_timer[1] <= self.__delay_timer[0]:
-            ## Send failure message as board is in atx operation
-            self.__log_write(4, 'Release all mouse buttons is prevented since board is busy')
-            self.__log_write(5, 'Put a failure send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: board is busy'))
-            return
-
         cmd = UART_SEND_MOUSE_CLEAR
         try:
             while len(cmd) > 0: # send all bytes to serial device
@@ -872,13 +840,6 @@ class Kvm:
             self.__log_write(1, f'Send mouse scroll wheel {orient} command failed as serial device not opened')
             self.__log_write(5, 'Put a failure send mouse response to write queue')
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: Device not opened'))
-            return
-
-        if time()-self.__delay_timer[1] <= self.__delay_timer[0]:
-            ## Send failure message as board is in atx operation
-            self.__log_write(4, f'Send mouse scroll wheel {orient} is prevented since board is busy')
-            self.__log_write(5, 'Put a failure send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: board is busy'))
             return
 
         cmd = UART_SEND_MOUSE_WHEEL(flag&0x0F) # transform flag 0x10/0x11 to 0x00/0x01
@@ -914,13 +875,6 @@ class Kvm:
                 'Invalid mouse button <{:02X}>'.format(button)))
             return
 
-        if time()-self.__delay_timer[1] <= self.__delay_timer[0]:
-            ## Send failure message as board is in atx operation
-            self.__log_write(4, 'Send click mouse button is prevented since board is busy')
-            self.__log_write(5, 'Put a failure send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: board is busy'))
-            return
-
         press = 'press' if act == MOUSE_PRESS else 'release'
         btn_txt = 'left' if button == MOUSE_LEFT else ('right' if button == MOUSE_RIGHT else 'middle')
         cmd = UART_SEND_MOUSE_CLICK(act, button) # construct serial protocol format
@@ -946,13 +900,6 @@ class Kvm:
             self.__log_write(1, 'Send mouse move command failed as serial device not opened')
             self.__log_write(5, 'Put a failure send mouse response to write queue')
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: Device not opened'))
-            return
-
-        if time()-self.__delay_timer[1] <= self.__delay_timer[0]:
-            ## Send failure message as board is in atx operation
-            self.__log_write(4, 'Send mouse move command is prevented since board is busy')
-            self.__log_write(5, 'Put a failure send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: board is busy'))
             return
 
         cmd = UART_SEND_MOUSE_MOVE(x, y) # construct serial protocol format
@@ -1077,13 +1024,6 @@ class Kvm:
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_ATX_RES, STATUS_FAILURE, 'Serial Error: Device not opened'))
             return
 
-        if time()-self.__delay_timer[1] <= self.__delay_timer[0]:
-            ## Send failure message as board is in atx operation
-            self.__log_write(4, 'Send atx signal is prevented since board is busy')
-            self.__log_write(5, 'Put a failure send atx response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_ATX_RES, STATUS_FAILURE, 'Serial Error: board is busy'))
-            return
-
         cmd = UART_SEND_ATX(sig)
         try:
             while len(cmd) > 0: # send all bytes to serial device
@@ -1097,7 +1037,6 @@ class Kvm:
                 'Serial Error: Send signal <{:02X}> timeout'.format(sig)))
         else:
             ## Send success message
-            self.__delay_timer = (ATX_DELAY_TIME[sig], time()) # set delay timer
             self.__log_write(3, 'Send atx signal to serial success')
             self.__log_write(5, 'Put a success send atx response to write queue')
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_ATX_RES, STATUS_SUCCESS,
