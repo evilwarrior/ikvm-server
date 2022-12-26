@@ -25,6 +25,7 @@
 /* Protocol settings */
 #define MAGIC_HEAD  0x0f
 #define MAGIC_TAIL  0xe0
+#define CMD_RSV     0x00    // Reserved
 #define CMD_KEY     0x10
 #define CMD_TXT     0x11
 #define CMD_KEY_CLR 0x12
@@ -67,6 +68,13 @@
 unsigned char g_buf[MSG_MAX_SIZE];
 int g_nBufCursor = 0;
 bool g_bBufFull = false;
+
+/* Asynchronous press PWR/RST buttons */
+bool g_isSendPwr = false; // is PWR button pressed by emulation
+bool g_isSendRst = false; // is RST button pressed by emulation
+unsigned long g_pwrTimer = 0; // recording PWR button pressed time
+unsigned long g_rstTimer = 0; // recording RST button pressed time
+unsigned long g_pwrDelay = 0; // how long PWR Timer would delay (PWR_DELAY or LPWR_DELAY)
 
 bool checksum(char msg[], int len)
 {
@@ -226,10 +234,31 @@ void ScrollWheel()
     }
 }
 
+void PowerSignal(unsigned long ulDelay)
+{
+    if (!g_isSendPwr)
+    {
+        g_pwrTimer = millis();
+        g_pwrDelay = ulDelay;
+        g_isSendPwr = true;
+        digitalWrite(PWR, HIGH);
+    }
+}
+
+void ResetSignal()
+{
+    if (!g_isSendRst)
+    {
+        g_rstTimer = millis();
+        g_isSendRst = true;
+        digitalWrite(RST, HIGH);
+    }
+}
+
 void AnalyzeByteFromBuf()
 {
     if (!checksum(g_buf, g_nBufCursor)) // checksum failed
-        return;
+        g_buf[CMD_AT] = CMD_RSV; // skip switch below for setting g_bBufFull to false
     switch (g_buf[CMD_AT])
     {
         case CMD_KEY: // click a keyboard key
@@ -256,25 +285,13 @@ void AnalyzeByteFromBuf()
             Mouse.release(MOUSE_MIDDLE);
             break;
         case CMD_PWR:   // emulate short press power button
-            TXLED1; // LED on, blinkies
-            digitalWrite(PWR, HIGH);
-            delay(PWR_DELAY);
-            digitalWrite(PWR, LOW);
-            TXLED0; // LED off, blinkies
+            PowerSignal(PWR_DELAY);
             break;
         case CMD_RST:   // emulate press reset button
-            TXLED1; // LED on, blinkies
-            digitalWrite(RST, HIGH);
-            delay(RST_DELAY);
-            digitalWrite(RST, LOW);
-            TXLED0; // LED off, blinkies
+            ResetSignal();
             break;
         case CMD_LPWR:  // emulate long press power button
-            TXLED1; // LED on, blinkies
-            digitalWrite(PWR, HIGH);
-            delay(LPWR_DELAY);
-            digitalWrite(PWR, LOW);
-            TXLED0; // LED off, blinkies
+            PowerSignal(LPWR_DELAY);
             break;
     }
     // reset buffer, cursor and full flag
@@ -287,6 +304,7 @@ void setup()
 {
     memset(g_buf, '\0', sizeof(g_buf)); // initialization buffer
 
+    pinMode(LED_BUILTIN_RX, OUTPUT);
     // I/O Setup
     digitalWrite(PWR, LOW);
     digitalWrite(RST, LOW);
@@ -303,17 +321,26 @@ void setup()
 
 void loop()
 {
-    // Transform original power button input into power button emulator output
     int nSt = digitalRead(PWR);
-    if (digitalRead(ORI_PWR) == nSt)
-    {
+    unsigned long ulCurTime = millis();
+    if (g_isSendPwr && ulCurTime-g_pwrTimer>g_pwrDelay)
+    { // Check if board is pulled PWR button to HIGH
+        digitalWrite(PWR, LOW);
+        g_isSendPwr = false;
+    }
+    else if (!g_isSendPwr && digitalRead(ORI_PWR) == nSt)
+    { // Transform original power button input into power button emulator output
         digitalWrite(PWR, nSt^0x01);
     }
 
-    // Transform original reset button input into reset button emulator output
     nSt = digitalRead(RST);
-    if (digitalRead(ORI_RST) == nSt)
-    {
+    if (g_isSendRst && ulCurTime-g_rstTimer>RST_DELAY)
+    { // Check if board is pulled RST button to HIGH
+        digitalWrite(RST, LOW);
+        g_isSendRst = false;
+    }
+    else if (!g_isSendRst && digitalRead(ORI_RST) == nSt)
+    { // Transform original reset button input into reset button emulator output
         digitalWrite(RST, nSt^0x01);
     }
 
@@ -323,5 +350,9 @@ void loop()
 
     // Read from iKVM server
     if (Serial1.available() > 0)
+    {
+        digitalWrite(LED_BUILTIN_RX, LOW);  // LED on, blinkies
         ReadByteToBuf();
+        digitalWrite(LED_BUILTIN_RX, HIGH); // LED off, blinkies
+    }
 }
