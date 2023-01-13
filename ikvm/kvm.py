@@ -14,13 +14,6 @@ from ._globals import *
 from ._protocol import *
 from ._uart import *
 
-LOG_LEVEL = ('FATAL', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE')
-LOG_BUFSIZE = 1
-SELECT_TIMEOUT  = 1 # second(s)
-WAIT_START_MJPG = 0.1 # second(s) wait mjpg-streamer killing
-WAIT_STOP_MJPG  = 2.2 # second(s) wait mjpg-streamer killing
-MAX_SHOW        = 20 # replay max batch send keys showed in detail
-
 get_start_mjpg_cmd = lambda root, cap_name, width, height, fps, mjpg_port: ' '.join((
     os.path.join(root, 'mjpg_streamer'),
     f'-i "input_uvc.so -d {cap_name} -r {width}x{height} -f {fps} -n"',
@@ -68,6 +61,7 @@ class Kvm:
         self.__mjpg_fps = None
         self.__mjpg_port = None
         self.__loop = None
+        self.__alive_answer = False
 
     def start(self):
         # Open logfile
@@ -83,11 +77,13 @@ class Kvm:
             sys.exit(48)
         server.listen()
         server.setblocking(False)
+        server.settimeout(SOCK_TIMEOUT)
         self.__log_write(4, 'Server socket is now listening')
         # Select settings
-        sockets = [server,] # only two members: ikvm server and client
+        self.__sockets = [server,] # only two members: ikvm server and client
         self.__w_queue = [] # whenever server want send message to client, the queue will be put client
         # Thread and Asynchronous settings
+        self.__sockets_lock = threading.Lock() # used when thread modify self.__sockets and self.__sock
         self.__send_msg = b'' # put message in __send_async wait for sending
         self.__send_msg_lock = threading.Lock() # used when thread put msg in self.__send_msg
         # Start an event loop in a subthread for main thread put an I/O bound task
@@ -102,16 +98,17 @@ class Kvm:
 
         self.__buf = b''
         while will.run: # exit when server received SIGINT or SIGTERM signal
-            if len(sockets) > 1 and sockets[1].fileno() == -1:
-                # Clear invalid socket
-                with self.__send_msg_lock: # clear anything related with writting
-                    self.__w_queue = []
-                    self.__send_msg = b''
-                    sockets.pop()
+            with self.__sockets_lock:
+                if len(self.__sockets) > 1 and self.__sockets[1].fileno() == -1:
+                    # Clear invalid socket
+                    with self.__send_msg_lock: # clear anything related with writting
+                        self.__w_queue = []
+                        self.__send_msg = b''
+                    self.__sockets.pop()
                     self.__sock = None
-                self.__log_write(4, 'Clear the invalid socket in read and write queue')
-                continue
-            r_sockets, w_sockets, _ = select.select(sockets, self.__w_queue, [], SELECT_TIMEOUT)
+                    self.__log_write(4, 'Clear the invalid socket in read and write queue')
+                    continue
+            r_sockets, w_sockets, _ = select.select(self.__sockets, self.__w_queue, [], SELECT_TIMEOUT)
             for sock in w_sockets:
                 if sock is not self.__sock:
                     self.__w_queue.remove(sock)
@@ -132,20 +129,9 @@ class Kvm:
                 break
 
             for sock in r_sockets:
-                ## Handle a incoming connection
+                ## Handle an incoming connection
                 if sock is server:
-                    client, ipport = sock.accept()
-                    ip = ipport[0][7:] if '.' in ipport[0] else f'[{ipport[0]}]' # ip addr representation convert
-                    ipport = f'{ip}:{ipport[1]}'
-                    if len(sockets) > 1:
-                        # reject if connection established
-                        client.close()
-                        self.__log_write(3, 'Received another connection from %s, rejected' %ipport)
-                    else:
-                        # accept a connection from client
-                        sockets.append(client)
-                        self.__sock = client
-                        self.__log_write(3, 'Received a connection from %s, accepted' %ipport)
+                    self.__handle_incoming_connection(sock)
                     continue
 
                 ## Handle client requests
@@ -215,7 +201,9 @@ class Kvm:
                 return True
             if self.__buf[:4] != HANDSHAKE_MSG:
                 # Reject as incoming connection initially send invalid handshake message
-                self.__sock.close()
+                with self.__sockets_lock:
+                    if self.__sock:
+                        self.__sock.close()
                 return False
         loc = self.__buf.find(MAGIC)
         if loc == -1:
@@ -244,10 +232,69 @@ class Kvm:
                 caps.remove(cap) # Remove unavailable captures
         return caps
 
+    async def __sleep_ask_alive(self):
+        while self.__accept and not self.__alive_answer:
+            await asyncio.sleep(0.01)
+
+    async def __wait_ask_alive(self, client, ipport):
+        try:
+            await asyncio.wait_for(self.__sleep_ask_alive(), timeout=ASK_ALIVE_TIMEOUT)
+        except asyncio.exceptions.TimeoutError:
+            pass
+
+        if self.__alive_answer:
+            # reject if previous connection is alive
+            client.close()
+            self.__log_write(3, 'Received another connection from %s, rejected' %ipport)
+        else:
+            if self.__accept:
+                # disconnect since receive ask alive response from old client timeout
+                self.__disconnect('wait ask alive response timeout')
+            # accept a connection from new client
+            with self.__sockets_lock:
+                self.__sockets.pop()
+                self.__sockets.append(client)
+                self.__sock = client
+            self.__log_write(3, 'Received a connection from %s, accepted' %ipport)
+
+    def __handle_incoming_connection(self, sock):
+        client, ipport = sock.accept()
+        client.settimeout(SOCK_TIMEOUT)
+        ip = ipport[0][7:] if '.' in ipport[0] else f'[{ipport[0]}]' # ip addr representation convert
+        ipport = f'{ip}:{ipport[1]}'
+
+        with self.__sockets_lock:
+            if len(self.__sockets) == 1:
+                # accept a connection from client
+                self.__sockets.append(client)
+                self.__sock = client
+                self.__log_write(3, 'Received a connection from %s, accepted' %ipport)
+                return
+
+        if not self.__accept:
+            with self.__sockets_lock:
+                # close old connection if the old client is not accepted
+                self.__sock.close()
+                # accept a connnection from new
+                self.__sockets.pop()
+                self.__sockets.append(client)
+                self.__sock = client
+            self.__log_write(3, 'Received a connection from %s, accepted' %ipport)
+            return
+
+        # send ask alive message to client
+        self.__log_write(4, 'Sent ask alive message to client')
+        self.__alive_answer = False
+        self.__send_async(ASK_ALIVE_MSG)
+        self.__log_write(5, 'Put the coroutine __wait_ask_alive into the event loop')
+        self.__async_run(self.__wait_ask_alive(client, ipport))
+
     ## non-blocking socket.recv handling process
     def __recv(self):
         try:
-            recv = self.__sock.recv(BUF)
+            with self.__sockets_lock:
+                if self.__sock:
+                    recv = self.__sock.recv(BUF)
             if recv == b'':
                 # Disconnected from client sent by FIN
                 self.__disconnect('server got FIN')
@@ -260,21 +307,18 @@ class Kvm:
                 return None
             elif e.args[0] == errno.ECONNRESET:
                 # Disconnected from client sent by RST
-                reason = 'server got RST'
-                self.__disconnect(reason)
+                self.__disconnect('server got RST')
                 return Quit
             elif e.args[0] == errno.ECONNABORTED:
                 # Disconnected since server aborted
-                reason = 'connection aborted'
-                self.__disconnect(reason)
+                self.__disconnect('connection aborted')
                 return Quit
-            #elif e.args[0] == errno.ENOTCONN:
-            #    # Disconnected since client not establish connection
-            #    reason = 'client not establish connection'
-            #    self.__disconnect(reason)
-            #    return Quit
             else:
                 raise e
+        except TimeoutError:
+            # Disconnected since socket timed out
+            self.__disconnect('socket timeout')
+            return Quit
 
     ## secure socket.send
     def __send(self, msg):
@@ -284,25 +328,24 @@ class Kvm:
             if timer > TIMEOUT_RT:
                 return
             try:
-                sent = self.__sock.send(msg)
+                with self.__sockets_lock:
+                    if self.__sock:
+                        sent = self.__sock.send(msg)
             except socket.error as e:
                 if e.args[0] == errno.ECONNRESET:
                     # Disconnected from client sent by RST
-                    reason = 'server got RST'
-                    self.__disconnect(reason)
+                    self.__disconnect('server got RST')
                     return
                 elif e.args[0] == errno.ECONNABORTED:
                     # Disconnected since server aborted
-                    reason = 'connection aborted'
-                    self.__disconnect(reason)
+                    self.__disconnect('connection aborted')
                     return
-                #elif e.args[0] == errno.ENOTCONN:
-                #    # Disconnected since client not establish connection
-                #    reason = 'client not establish connection'
-                #    self.__disconnect(reason)
-                #    return
                 else:
                     raise e
+            except TimeoutError:
+                # Disconnected since socket timed out
+                self.__disconnect('socket timeout')
+                return
             msg = msg[sent:]
             if len(msg) > 0:
                 timer += 1
@@ -312,8 +355,9 @@ class Kvm:
     def __send_async(self, msg): # use function __send when in start() called select()
         with self.__send_msg_lock:
             self.__send_msg += msg
-            if self.__sock:
-                self.__w_queue.append(self.__sock)
+            with self.__sockets_lock:
+                if self.__sock:
+                    self.__w_queue.append(self.__sock)
 
     def __async_run(self, task):
         if not self.__loop:
@@ -331,7 +375,9 @@ class Kvm:
         if self.__uart and self.__uart.is_open:
             self.__uart.close()
             self.__log_write(3, 'Close the opened serial device')
-        self.__sock.close()
+        with self.__sockets_lock:
+            if self.__sock:
+                self.__sock.close()
         self.__accept = False
         self.__log_write(3, 'Closed the accepted client socket')
 
@@ -340,6 +386,10 @@ class Kvm:
 
     def __handle_goodbye(self):
         self.__close_client('Got a goodbye message')
+
+    def __handle_reply_alive(self):
+        self.__log_write(4, 'Got a replay alive message')
+        self.__alive_answer = True
 
     def __handle_list_uarts_request(self):
         self.__log_write(4, 'Got a list uarts request message')
@@ -1045,6 +1095,8 @@ class Kvm:
     __RECV_HANDLE_SWITCH = {
         TYPE_HANDSHAKE: __handle_handshake,
         TYPE_GOODBYE: __handle_goodbye,
+        #TYPE_ASK_ALIVE: __handle_ask_alive,
+        TYPE_REPLY_ALIVE: __handle_reply_alive,
         TYPE_LIST_UART_REQ: __handle_list_uarts_request,
         TYPE_LIST_CAP_REQ: __handle_list_captures_request,
         TYPE_RUN_MJPG_REQ: __handle_run_mjpg_request,

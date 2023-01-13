@@ -44,6 +44,8 @@ type  content                              comment
                                             - length allowed be 0
  FF   n/a                                  handshake message
  EE   n/a                                  goodbye message
+ F0   n/a                                  ask alive message, check if peer is alive
+ F1   n/a                                  reply alive message
 """
 import struct
 
@@ -51,6 +53,8 @@ MAGIC = b'\xFF\x31\xD5'
 
 TYPE_HANDSHAKE      = 0xFF
 TYPE_GOODBYE        = 0xEE
+TYPE_ASK_ALIVE      = 0xF0
+TYPE_REPLY_ALIVE    = 0xF1
 TYPE_LIST_UART_REQ  = 0x00
 TYPE_LIST_CAP_REQ   = 0x01
 TYPE_RUN_MJPG_REQ   = 0x10
@@ -86,6 +90,8 @@ STATUS_CODE = {STATUS_SUCCESS: 'success', STATUS_FAILURE: 'failure'}
 
 HANDSHAKE_MSG    = struct.pack('!3sB', MAGIC, TYPE_HANDSHAKE)
 GOODBYE_MSG      = struct.pack('!3sB', MAGIC, TYPE_GOODBYE)
+ASK_ALIVE_MSG    = struct.pack('!3sB', MAGIC, TYPE_ASK_ALIVE)
+REPLY_ALIVE_MSG  = struct.pack('!3sB', MAGIC, TYPE_REPLY_ALIVE)
 LIST_UART_REQ    = struct.pack('!3sB', MAGIC, TYPE_LIST_UART_REQ)
 LIST_CAP_REQ     = struct.pack('!3sB', MAGIC, TYPE_LIST_CAP_REQ)
 RUN_MJPG_REQ     = lambda cap, res, fps, port:(
@@ -130,6 +136,8 @@ __all__ = [
         'MAGIC',
         'TYPE_HANDSHAKE',
         'TYPE_GOODBYE',
+        'TYPE_ASK_ALIVE',
+        'TYPE_REPLY_ALIVE',
         'TYPE_LIST_UART_REQ',
         'TYPE_LIST_CAP_REQ',
         'TYPE_RUN_MJPG_REQ',
@@ -160,6 +168,8 @@ __all__ = [
         'STATUS_CODE',
         'HANDSHAKE_MSG',
         'GOODBYE_MSG',
+        'ASK_ALIVE_MSG',
+        'REPLY_ALIVE_MSG',
         'LIST_UART_REQ',
         'LIST_CAP_REQ',
         'RUN_MJPG_REQ',
