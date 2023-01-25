@@ -683,6 +683,17 @@ class Kvm:
         self.__send_async(STATUS_CODE_RES(TYPE_OPEN_UART_RES, STATUS_FAILURE,
             f'Server Error: No such device "{secure_name}"'))
 
+    def __uart_write(self, data):
+        try:
+            while len(data) > 0: # send all bytes to serial device
+                sent = self.__uart.write(data[:UART_MAX_BUF])
+                data = data[sent:]
+        except serial.SerialTimeoutException:
+            return {'result': 'error', 'detail': 'timeout'}
+        except serial.serialutil.SerialException as e:
+            return {'result': 'error', 'detail': e.args[0]}
+        return {'result': 'success'}
+
     def __send_key_to_uart(self, act, key):
         if self.__uart is None or not self.__uart.is_open:
             ## Send failure message when serial device is not opened
@@ -695,21 +706,19 @@ class Kvm:
         # Determine detail be with printable key or hex code
         key_txt = '"%s"' %chr(key) if chr(key).isprintable() and key in range(0x80) else '<{:02X}>'.format(key)
         cmd = UART_SEND_KEY(act, key) # construct serial protocol format
-        try:
-            while len(cmd) > 0: # send all bytes to serial device
-                sent = self.__uart.write(cmd)
-                cmd = cmd[sent:]
-        except serial.SerialTimeoutException:
-            ## Send failure message when send key to serial device timeout
-            self.__log_write(1, 'Send key command to serial timeout')
-            self.__log_write(5, 'Put a failure send key response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE,
-                f'Serial Error: Send {press} key {key_txt} timeout'))
-        else:
+        res = self.__uart_write(cmd) # send command to uart device
+        if res['result'] == 'success':
             ## Send success message
             self.__log_write(4, 'Send key command to serial success')
             self.__log_write(5, 'Put a success send key response to write queue')
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_SUCCESS, f'Key {key_txt} {press}'))
+        else:
+            ## Send failure message
+            detail = ' as {}'.format(res.get('detail')) if res.get('detail') else ''
+            self.__log_write(1, f'Send key command to serial failed{detail}')
+            self.__log_write(5, 'Put a failure send key response to write queue')
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE,
+                f'Serial Error: Send {press} key {key_txt} failed{detail}'))
 
     def __send_text_chars_to_uart(self, chars):
         if self.__uart is None or not self.__uart.is_open:
@@ -723,22 +732,20 @@ class Kvm:
         chrs = raw(''.join([chr(char) for char in chars][:MAX_SHOW]))
         # divide a single command to multiple commands that can be handled with hardware
         cmds = b''.join([UART_SEND_CHAR(char) for char in chars])
-        try:
-            while len(cmds) > 0: # send all bytes to serial device
-                sent = self.__uart.write(cmds[:UART_MAX_BUF])
-                cmds = cmds[sent:]
-        except serial.SerialTimeoutException:
-            ## Send failure message when send key to serial device timeout
-            self.__log_write(1, 'Send text characters command to serial timeout')
-            self.__log_write(5, 'Put a failure send key response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_KEY_RES, STATUS_FAILURE, f'Serial Error: Send text characters started with {chrs} timeout'))
-        else:
+        res = self.__uart_write(cmds) # send commands to uart device
+        if res['result'] == 'success':
             ## Send success message
             self.__log_write(4, 'Send text characters command to serial success')
             self.__log_write(5, 'Put a success send key response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_KEY_RES, STATUS_SUCCESS, f'Send text characters started with {chrs} success'))
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_SUCCESS,
+                f'Send text characters started with {chrs} success'))
+        else:
+            ## Send failure message
+            detail = ' as {}'.format(res.get('detail')) if res.get('detail') else ''
+            self.__log_write(1, f'Send text characters command to serial failed{detail}')
+            self.__log_write(5, 'Put a failure send key response to write queue')
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE,
+                f'Serial Error: Send text characters started with {chrs} failed{detail}'))
 
     def __send_clear_keys_to_uart(self):
         if self.__uart is None or not self.__uart.is_open:
@@ -749,22 +756,20 @@ class Kvm:
             return
 
         cmd = UART_SEND_KEY_CLEAR
-        try:
-            while len(cmd) > 0: # send all bytes to serial device
-                sent = self.__uart.write(cmd)
-                cmd = cmd[sent:]
-        except serial.SerialTimeoutException:
-            ## Send failure message when send key to serial device timeout
-            self.__log_write(1, 'Send release all keys command to serial timeout')
-            self.__log_write(5, 'Put a failure send key response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_KEY_RES, STATUS_FAILURE, 'Serial Error: Send release all keys command timeout'))
-        else:
+        res = self.__uart_write(cmd) # send command to uart device
+        if res['result'] == 'success':
             ## Send success message
             self.__log_write(4, 'Send release all keys command to serial success')
             self.__log_write(5, 'Put a success send key response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_KEY_RES, STATUS_SUCCESS, 'Send release all keys command success'))
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_SUCCESS,
+                'Send release all keys command success'))
+        else:
+            ## Send failure message
+            detail = ' as {}'.format(res.get('detail')) if res.get('detail') else ''
+            self.__log_write(1, f'Send release all keys command to serial failed{detail}')
+            self.__log_write(5, 'Put a failure send key response to write queue')
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_KEY_RES, STATUS_FAILURE,
+                f'Serial Error: Send release all keys command failed{detail}'))
 
     def __handle_send_key_request(self):
         self.__log_write(4, 'Got a send key request message')
@@ -866,22 +871,20 @@ class Kvm:
             return
 
         cmd = UART_SEND_MOUSE_CLEAR
-        try:
-            while len(cmd) > 0: # send all bytes to serial device
-                sent = self.__uart.write(cmd)
-                cmd = cmd[sent:]
-        except serial.SerialTimeoutException:
-            ## Send failure message when send mouse to serial device timeout
-            self.__log_write(1, 'Send release all mouse buttons command to serial timeout')
-            self.__log_write(5, 'Put a failure send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: Send release all mouse buttons command timeout'))
-        else:
+        res = self.__uart_write(cmd) # send command to uart device
+        if res['result'] == 'success':
             ## Send success message
             self.__log_write(4, 'Send release all mouse buttons command to serial success')
             self.__log_write(5, 'Put a success send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_MOUSE_RES, STATUS_SUCCESS, 'Send release all mouse buttons command success'))
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_SUCCESS,
+                'Send release all mouse buttons command success'))
+        else:
+            ## Send failure message
+            detail = ' as {}'.format(res.get('detail')) if res.get('detail') else ''
+            self.__log_write(1, f'Send release all mouse buttons command to serial failed{detail}')
+            self.__log_write(5, 'Put a failure send mouse response to write queue')
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE,
+                f'Serial Error: Send release all mouse buttons command failed{detail}'))
 
     def __send_mouse_scroll_wheel_to_uart(self, flag):
         orient = 'up' if flag == MOUSE_WHEEL_UP else 'down'
@@ -893,22 +896,19 @@ class Kvm:
             return
 
         cmd = UART_SEND_MOUSE_WHEEL(flag&0x0F) # transform flag 0x10/0x11 to 0x00/0x01
-        try:
-            while len(cmd) > 0: # send all bytes to serial device
-                sent = self.__uart.write(cmd)
-                cmd = cmd[sent:]
-        except serial.SerialTimeoutException:
-            ## Send failure message when send mouse to serial device timeout
-            self.__log_write(1, f'Send mouse scroll wheel {orient} command to serial timeout')
-            self.__log_write(5, 'Put a failure send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_MOUSE_RES, STATUS_FAILURE, f'Serial Error: Send mouse scroll wheel {orient} command timeout'))
-        else:
+        res = self.__uart_write(cmd) # send command to uart device
+        if res['result'] == 'success':
             ## Send success message
             self.__log_write(4, f'Send mouse scroll wheel {orient} command to serial success')
             self.__log_write(5, 'Put a success send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_MOUSE_RES, STATUS_SUCCESS, f'Mouse scrolled wheel {orient}'))
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_SUCCESS, f'Mouse scrolled wheel {orient}'))
+        else:
+            ## Send failure message
+            detail = ' as {}'.format(res.get('detail')) if res.get('detail') else ''
+            self.__log_write(1, f'Send mouse scroll wheel {orient} command to serial failed{detail}')
+            self.__log_write(5, 'Put a failure send mouse response to write queue')
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE,
+                f'Serial Error: Send mouse scroll wheel {orient} command failed{detail}'))
 
     def __send_click_mouse_butten_to_uart(self, act, button):
         if self.__uart is None or not self.__uart.is_open:
@@ -928,21 +928,19 @@ class Kvm:
         press = 'press' if act == MOUSE_PRESS else 'release'
         btn_txt = 'left' if button == MOUSE_LEFT else ('right' if button == MOUSE_RIGHT else 'middle')
         cmd = UART_SEND_MOUSE_CLICK(act, button) # construct serial protocol format
-        try:
-            while len(cmd) > 0: # send all bytes to serial device
-                sent = self.__uart.write(cmd)
-                cmd = cmd[sent:]
-        except serial.SerialTimeoutException:
-            ## Send failure message when send mouse to serial device timeout
-            self.__log_write(1, 'Send click mouse button command to serial timeout')
-            self.__log_write(5, 'Put a failure send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_MOUSE_RES, STATUS_FAILURE, f'Serial Error: Send {press} mouse button {btn_txt} timeout'))
-        else:
+        res = self.__uart_write(cmd) # send command to uart device
+        if res['result'] == 'success':
             ## Send success message
             self.__log_write(4, 'Send click mouse button command to serial success')
             self.__log_write(5, 'Put a success send mouse response to write queue')
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_SUCCESS, f'Mouse button {btn_txt} {press}'))
+        else:
+            ## Send failure message
+            detail = ' as {}'.format(res.get('detail')) if res.get('detail') else ''
+            self.__log_write(1, f'Send click mouse button command to serial failed{detail}')
+            self.__log_write(5, 'Put a failure send mouse response to write queue')
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE,
+                f'Serial Error: Send {press} mouse button {btn_txt} failed{detail}'))
 
     def __send_mouse_move_to_uart(self, x, y):
         if self.__uart is None or not self.__uart.is_open:
@@ -953,22 +951,19 @@ class Kvm:
             return
 
         cmd = UART_SEND_MOUSE_MOVE(x, y) # construct serial protocol format
-        try:
-            while len(cmd) > 0: # send all bytes to serial device
-                sent = self.__uart.write(cmd)
-                cmd = cmd[sent:]
-        except serial.SerialTimeoutException:
-            ## Send failure message when send mouse to serial device timeout
-            self.__log_write(1, 'Send mouse move command to serial timeout')
-            self.__log_write(5, 'Put a failure send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_MOUSE_RES, STATUS_FAILURE, 'Serial Error: Send mouse move command timeout'))
-        else:
+        res = self.__uart_write(cmd) # send command to uart device
+        if res['result'] == 'success':
             ## Send success message
             self.__log_write(4, 'Send mouse move command to serial success')
             self.__log_write(5, 'Put a success send mouse response to write queue')
-            self.__send_async(STATUS_CODE_RES(
-                TYPE_SEND_MOUSE_RES, STATUS_SUCCESS, f'Mouse shifted ({x}, {y})'))
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_SUCCESS, f'Mouse shifted ({x}, {y})'))
+        else:
+            ## Send failure message
+            detail = ' as {}'.format(res.get('detail')) if res.get('detail') else ''
+            self.__log_write(1, f'Send mouse move command to serial failed{detail}')
+            self.__log_write(5, 'Put a failure send mouse response to write queue')
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_MOUSE_RES, STATUS_FAILURE,
+                f'Serial Error: Send mouse move command failed{detail}'))
 
     def __handle_send_mouse_request(self):
         self.__log_write(4, 'Got a send mouse request message')
@@ -1044,7 +1039,7 @@ class Kvm:
     def __handle_send_atx_request(self):
         self.__log_write(4, 'Got a send atx request message')
         ## Read atx signal
-        key = b''
+        sig = b''
         while True:
             if len(self.__buf) == 0:
                 res = self.__recv()
@@ -1075,22 +1070,20 @@ class Kvm:
             return
 
         cmd = UART_SEND_ATX(sig)
-        try:
-            while len(cmd) > 0: # send all bytes to serial device
-                sent = self.__uart.write(cmd)
-                cmd = cmd[sent:]
-        except serial.SerialTimeoutException:
-            ## Send failure message when send key to serial device timeout
-            self.__log_write(1, 'Send atx signal to serial timeout')
-            self.__log_write(5, 'Put a failure send atx response to write queue')
-            self.__send_async(STATUS_CODE_RES(TYPE_SEND_ATX_RES, STATUS_FAILURE,
-                'Serial Error: Send signal <{:02X}> timeout'.format(sig)))
-        else:
+        res = self.__uart_write(cmd) # send command to uart device
+        if res['result'] == 'success':
             ## Send success message
             self.__log_write(3, 'Send atx signal to serial success')
             self.__log_write(5, 'Put a success send atx response to write queue')
             self.__send_async(STATUS_CODE_RES(TYPE_SEND_ATX_RES, STATUS_SUCCESS,
                 'Signal <{:02X}> sent'.format(sig)))
+        else:
+            ## Send failure message when send key to serial device timeout
+            detail = ' as {}'.format(res.get('detail')) if res.get('detail') else ''
+            self.__log_write(1, f'Send atx signal to serial failed{detail}')
+            self.__log_write(5, 'Put a failure send atx response to write queue')
+            self.__send_async(STATUS_CODE_RES(TYPE_SEND_ATX_RES, STATUS_FAILURE,
+                f'Serial Error: Send signal <{sig:02X}> failed{detail}'))
 
     __RECV_HANDLE_SWITCH = {
         TYPE_HANDSHAKE: __handle_handshake,
